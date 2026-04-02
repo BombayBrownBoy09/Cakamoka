@@ -1081,10 +1081,15 @@ if run_analysis or "analysis_done" in st.session_state:
                 st.markdown("<p class='section-title'>Statistical Tests</p>", unsafe_allow_html=True)
                 if sig_params:
                     for param, pval, method, n_c, n_s in sorted(sig_params, key=lambda x: x[1]):
+                        # Format p-value: use scientific notation below 0.001 so it never displays as 0.0000
+                        if pval < 0.001:
+                            p_display = f"{pval:.2e}"
+                        else:
+                            p_display = f"{pval:.4f}"
                         st.markdown(
                             f"<div style='display:flex;align-items:center;margin-bottom:8px;'>"
                             f"<span style='font-size:14px;color:#1d1d1f;font-weight:500;flex:1;'>{param}</span>"
-                            f"<span class='tag-sig'>p = {pval:.4f}</span>"
+                            f"<span class='tag-sig'>p = {p_display}</span>"
                             f"</div>"
                             f"<p style='font-size:11px;color:#aeaeb2;margin-top:-6px;margin-bottom:8px;'>"
                             f"{method} &nbsp;|&nbsp; ctrl n={n_c}, sample n={n_s}</p>",
