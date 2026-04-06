@@ -189,7 +189,7 @@ st.markdown("""
     }
 
     .stButton > button {
-        background: #1d1d1f;
+        background: #1a7f4b;
         color: #ffffff;
         border: none;
         border-radius: 980px;
@@ -201,7 +201,7 @@ st.markdown("""
         transition: background 0.15s;
     }
     .stButton > button:hover {
-        background: #3a3a3c;
+        background: #166d3f;
         color: #ffffff;
     }
 
@@ -247,7 +247,7 @@ st.markdown("""
 # ─────────────────────────────────────────────
 # CONSTANTS
 # ─────────────────────────────────────────────
-TPA_PARAMS   = ["Hardness", "Springiness", "Cohesiveness", "Resilience", "Chewiness"]
+TPA_PARAMS   = ["Hardness", "Resilience", "Cohesiveness", "Springiness", "Chewiness"]
 ALL_PARAMS   = TPA_PARAMS + ["Max Shear Force (N)"]
 MAJOR_THRESH = 40   # % difference threshold for major
 MINOR_THRESH = 10   # % difference below which not shown
@@ -683,12 +683,12 @@ with st.sidebar:
     st.markdown("<hr style='border:none;border-top:1px solid #e8e8ed;margin:16px 0;'>", unsafe_allow_html=True)
     st.markdown("<p class='section-title'>Replicates</p>", unsafe_allow_html=True)
     n_replicates = st.number_input(
-        "Replicates per sample",
+        "Default replicates (fallback)",
         min_value=2, max_value=20, value=9, step=1,
-        help="Number of individual measurements taken per sample. Mean and SD are computed automatically from these values. Minimum 2 required for statistical testing."
+        help="Used only for the analytical t-test fallback when summary stats are entered without an explicit n. When uploading a CSV, n is counted automatically per sample."
     )
     st.markdown(
-        "<p class='sub-text' style='margin-top:6px;'>Enter all replicate readings. Mean and SD are calculated automatically. Statistical tests use the actual values — no data is fabricated.</p>",
+        "<p class='sub-text' style='margin-top:6px;'>Replicate counts can differ between samples — each sample's n is determined from its data. Max Shear Force can have a different n from TPA parameters within the same sample.</p>",
         unsafe_allow_html=True,
     )
 
@@ -711,157 +711,118 @@ tab_input, tab_results, tab_viz, tab_image = st.tabs(["Data Input", "Results & I
 # ─────────────────────────────────────────────
 with tab_input:
 
+    # ─── CSV Upload ───
     st.markdown("<div class='card'>", unsafe_allow_html=True)
-    st.markdown("<p class='section-title'>Input Method</p>", unsafe_allow_html=True)
+    st.markdown("<p class='section-title'>Import Data from CSV</p>", unsafe_allow_html=True)
     st.markdown(
         "<p class='sub-text'>"
-        "<b>Individual replicates</b> is the statistically correct approach — enter each raw reading directly "
-        "from the texture analyser. Mean and SD are computed automatically, and statistical tests use the "
-        "actual data distribution. "
-        "<b>Summary statistics</b> (mean, SD, n) is a valid fallback when you only have exported summaries, "
-        "and uses an analytical Welch t-test formula — no data is fabricated."
+        "Upload a CSV where each row is one replicate measurement. Each sample may have a different number "
+        "of replicates — the count is determined automatically per sample. Max Shear Force may have fewer "
+        "replicates than the TPA parameters within the same sample; simply leave those rows blank in that "
+        "column and they will be excluded. "
+        "<br><br>"
+        "Required columns: <b>Sample</b>, <b>Hardness</b>, <b>Resilience</b>, <b>Cohesiveness</b>, "
+        "<b>Springiness</b>, <b>Chewiness</b>, <b>MaxShear</b>. "
+        "The control sample must be named exactly as configured in the sidebar."
         "</p>",
         unsafe_allow_html=True,
     )
-    input_mode = st.radio(
-        "Input mode",
-        ["Individual replicates (recommended)", "Summary statistics — mean, SD, n"],
-        horizontal=True,
-        label_visibility="collapsed",
+
+    # Download template button
+    template_cols = ["Sample", "Hardness", "Resilience", "Cohesiveness", "Springiness", "Chewiness", "MaxShear"]
+    template_rows = []
+    for sname in sample_names:
+        template_rows.append({c: (sname if c == "Sample" else "") for c in template_cols})
+    template_df  = pd.DataFrame(template_rows)
+    template_csv = template_df.to_csv(index=False)
+    st.download_button(
+        label="Download blank template",
+        data=template_csv,
+        file_name="tpa_template.csv",
+        mime="text/csv",
     )
-    st.markdown("</div>", unsafe_allow_html=True)
 
-    # ---- Build input grid ----
-    # input_data stores either raw reps or summary stats per sample per param
-    input_data   = {}  # {sample: {param: {"reps": [...]} OR {"mean":, "sd":, "n":}}}
+    st.markdown("<hr class='thin-divider'>", unsafe_allow_html=True)
 
-    if "Individual" in input_mode:
-        # ─── MODE A: Individual replicates (PRIMARY) ───
-        for samp in sample_names:
-            is_ctrl = samp == control_sample
-            st.markdown(
-                f"<div class='card'><p class='section-title'>{samp}"
-                f"{'&nbsp;&nbsp;—&nbsp;&nbsp;Control' if is_ctrl else ''}</p>",
-                unsafe_allow_html=True,
-            )
-            param_data = {}
-            for param in ALL_PARAMS:
-                st.markdown(
-                    f"<p style='font-size:11px;font-weight:600;color:#6e6e73;"
-                    f"text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px;margin-top:10px;'>"
-                    f"{param}</p>",
-                    unsafe_allow_html=True,
-                )
-                rep_cols = st.columns(int(n_replicates))
-                reps = []
-                for r in range(int(n_replicates)):
-                    with rep_cols[r]:
-                        v = st.number_input(
-                            f"Rep {r+1}", value=1.0, min_value=0.0, step=0.01,
-                            key=f"rep_{samp}_{param}_{r}",
-                            label_visibility="visible",
-                        )
-                        reps.append(v)
-                # Auto-compute and show mean + SD inline
-                arr = np.array(reps)
-                auto_mean = float(arr.mean())
-                auto_sd   = float(arr.std(ddof=1)) if len(reps) > 1 else 0.0
-                st.markdown(
-                    f"<p style='font-size:11px;color:#6e6e73;margin-top:-4px;'>"
-                    f"Mean: <b>{auto_mean:.3f}</b>&nbsp;&nbsp;SD: <b>{auto_sd:.3f}</b>"
-                    f"&nbsp;&nbsp;<span style='color:#aeaeb2;'>n={len(reps)}</span></p>",
-                    unsafe_allow_html=True,
-                )
-                param_data[param] = {"reps": reps}
-            input_data[samp] = param_data
-            st.markdown("</div>", unsafe_allow_html=True)
-
-    else:
-        # ─── MODE B: Summary statistics fallback ───
-        st.markdown(
-            "<div class='card' style='border-left:3px solid #ff9f0a;'>"
-            "<p style='font-size:12px;color:#b76e00;font-weight:500;margin-bottom:8px;'>Summary statistics mode</p>"
-            "<p class='sub-text'>Enter the mean, standard deviation, and number of replicates (n) for each parameter. "
-            "The t-test is computed analytically using the Welch–Satterthwaite formula — statistically valid, "
-            "but power is limited when n is small. Minimum n = 2 per sample for any p-value to be reported.</p>"
-            "</div>",
-            unsafe_allow_html=True,
-        )
-        for samp in sample_names:
-            is_ctrl = samp == control_sample
-            st.markdown(
-                f"<div class='card'><p class='section-title'>{samp}"
-                f"{'&nbsp;&nbsp;—&nbsp;&nbsp;Control' if is_ctrl else ''}</p>",
-                unsafe_allow_html=True,
-            )
-            param_data = {}
-            cols = st.columns(len(ALL_PARAMS))
-            for j, param in enumerate(ALL_PARAMS):
-                with cols[j]:
-                    st.markdown(
-                        f"<p style='font-size:11px;font-weight:600;color:#6e6e73;"
-                        f"text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px;'>{param}</p>",
-                        unsafe_allow_html=True,
-                    )
-                    mean_val = st.number_input("Mean", value=1.0, min_value=0.0, step=0.01,
-                                              key=f"mean_{samp}_{param}", label_visibility="visible")
-                    sd_val   = st.number_input("SD",   value=0.1, min_value=0.0, step=0.01,
-                                              key=f"sd_{samp}_{param}",   label_visibility="visible")
-                    n_val    = st.number_input("n",    value=int(n_replicates), min_value=2, max_value=50, step=1,
-                                              key=f"n_{samp}_{param}",    label_visibility="visible")
-                    param_data[param] = {"mean": mean_val, "sd": sd_val, "n": int(n_val)}
-            input_data[samp] = param_data
-            st.markdown("</div>", unsafe_allow_html=True)
-
-    st.markdown("<br>", unsafe_allow_html=True)
-    run_analysis = st.button("Run Analysis")
-
-    # ─── CSV Upload Alternative ───
-    st.markdown("<div class='card'>", unsafe_allow_html=True)
-    st.markdown("<p class='section-title'>Import from CSV</p>", unsafe_allow_html=True)
-    st.markdown(
-        "<p class='sub-text'>"
-        "Upload a CSV where each row is one replicate measurement. "
-        "Required columns: <b>Sample</b>, <b>Hardness</b>, <b>Springiness</b>, <b>Cohesiveness</b>, "
-        "<b>Resilience</b>, <b>Chewiness</b>, <b>MaxShear</b>. "
-        "Mean and SD are computed per sample automatically. The control sample must be named exactly "
-        "as configured in the sidebar."
-        "</p>",
-        unsafe_allow_html=True,
-    )
     uploaded_csv = st.file_uploader("Upload CSV", type=["csv"], label_visibility="collapsed")
+
+    input_data = {}
+    csv_loaded = False
+
     if uploaded_csv:
         try:
             csv_df = pd.read_csv(uploaded_csv)
-            st.dataframe(csv_df, use_container_width=True)
-            col_map = {
-                "Hardness":            "Hardness",
-                "Springiness":         "Springiness",
-                "Cohesiveness":        "Cohesiveness",
-                "Resilience":          "Resilience",
-                "Chewiness":           "Chewiness",
-                "Max Shear Force (N)": "MaxShear",
-            }
-            csv_input = {}
-            for sname, grp in csv_df.groupby("Sample"):
-                sname = str(sname).strip()
-                pdata = {}
-                for param, col in col_map.items():
-                    if col in grp.columns:
-                        pdata[param] = {"reps": grp[col].dropna().tolist()}
-                    else:
-                        pdata[param] = {"reps": [1.0]}
-                csv_input[sname] = pdata
-            # Override input_data with CSV
-            input_data = csv_input
-            st.markdown(
-                "<p style='font-size:12px;color:#30d158;margin-top:8px;'>"
-                f"CSV loaded — {len(csv_input)} samples detected. Click Run Analysis to proceed.</p>",
-                unsafe_allow_html=True,
-            )
+
+            # Validate required columns
+            required = {"Sample", "Hardness", "Resilience", "Cohesiveness", "Springiness", "Chewiness"}
+            missing  = required - set(csv_df.columns)
+            if missing:
+                st.error(f"Missing required columns: {', '.join(sorted(missing))}")
+            else:
+                # Show preview
+                st.markdown("<p class='section-title' style='margin-top:16px;'>Preview</p>", unsafe_allow_html=True)
+                st.dataframe(csv_df, use_container_width=True)
+
+                col_map = {
+                    "Hardness":            "Hardness",
+                    "Resilience":          "Resilience",
+                    "Cohesiveness":        "Cohesiveness",
+                    "Springiness":         "Springiness",
+                    "Chewiness":           "Chewiness",
+                    "Max Shear Force (N)": "MaxShear",
+                }
+
+                csv_input      = {}
+                sample_n_table = {}  # for display
+
+                for sname, grp in csv_df.groupby("Sample", sort=False):
+                    sname = str(sname).strip()
+                    pdata = {}
+                    n_info = {}
+                    for param, col in col_map.items():
+                        if col in grp.columns:
+                            vals = grp[col].dropna().tolist()
+                            pdata[param] = {"reps": vals}
+                            n_info[param] = len(vals)
+                        else:
+                            # MaxShear column absent — mark as missing, not error
+                            pdata[param] = {"reps": []}
+                            n_info[param] = 0
+                    csv_input[sname]      = pdata
+                    sample_n_table[sname] = n_info
+
+                input_data = csv_input
+                csv_loaded = True
+
+                # Show per-sample n table
+                st.markdown("<p class='section-title' style='margin-top:16px;'>Replicate counts detected</p>", unsafe_allow_html=True)
+                n_display = pd.DataFrame(sample_n_table).T
+                n_display.index.name = "Sample"
+                st.dataframe(n_display, use_container_width=True)
+
+                detected_samples = list(csv_input.keys())
+                st.markdown(
+                    f"<p style='font-size:12px;color:#1a7f4b;margin-top:8px;font-weight:500;'>"
+                    f"{len(csv_input)} samples loaded: {', '.join(detected_samples)}. "
+                    f"Click Run Analysis to proceed.</p>",
+                    unsafe_allow_html=True,
+                )
+
         except Exception as e:
             st.error(f"Could not parse CSV: {e}")
+
+    else:
+        st.markdown(
+            "<div style='text-align:center;padding:40px 0;color:#aeaeb2;font-size:13px;'>"
+            "No file uploaded yet. Drop your CSV above or download the blank template to get started."
+            "</div>",
+            unsafe_allow_html=True,
+        )
+
     st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    run_analysis = st.button("Run Analysis", disabled=not csv_loaded)
 
 
 # ─────────────────────────────────────────────
