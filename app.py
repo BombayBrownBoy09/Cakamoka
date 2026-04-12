@@ -204,6 +204,13 @@ st.markdown("""
         background: #166d3f;
         color: #ffffff;
     }
+    .stButton > button:disabled,
+    .stButton > button[disabled] {
+        background: #1a7f4b !important;
+        color: #ffffff !important;
+        opacity: 0.45;
+        cursor: not-allowed;
+    }
 
     div[data-testid="stTabs"] button {
         font-size: 14px !important;
